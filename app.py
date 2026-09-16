@@ -15,10 +15,9 @@
 import os
 import fitz
 import numpy as np
-
+from sklearn.feature_extraction.text import TfidfVectorizer
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-from sentence_transformers import SentenceTransformer
 from groq import Groq
 
 
@@ -63,7 +62,6 @@ groq_client = Groq(api_key=GROQ_API_KEY)
 # the CATCH/scenario documents that are most relevant to
 # the guest situation.
 
-embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
 
 
 # ============================================================
@@ -185,7 +183,7 @@ def extract_and_chunk_pdf(pdf_path, chunk_size=500, overlap=100):
 #
 # When a guest scenario comes in, search() finds the chunks
 # that are most similar/relevant to that scenario.
-
+vectorizer = TfidfVectorizer()
 class SimpleVectorDB:
 
     def __init__(self):
@@ -199,10 +197,8 @@ class SimpleVectorDB:
         self.chunks.extend(text_chunks)
 
         # Convert every chunk into an embedding/vector
-        vectors = embedding_model.encode(
-            text_chunks,
-            convert_to_numpy=True
-        )
+        vectors = vectorizer.transform(text_chunks).toarray()
+       
 
         if len(self.embeddings) == 0:
 
@@ -223,10 +219,7 @@ class SimpleVectorDB:
     ):
 
         # Convert the guest scenario into an embedding
-        query_vector = embedding_model.encode(
-            [query],
-            convert_to_numpy=True
-        )[0]
+        query_vector = vectorizer.transform([query]).toarray()[0]
 
         # Compare the guest scenario to every PDF chunk
         dot_products = np.dot(
@@ -306,12 +299,9 @@ print(
     f"{len(all_text_chunks)}"
 )
 
-
+vectorizer.fit(all_text_chunks)
 # Turn all chunks into embeddings and store them
-vector_db.add_documents(
-    all_text_chunks,
-    embedding_model
-)
+vector_db.add_documents(all_text_chunks, vectorizer)
 
 print("Vector database is ready.")
 
@@ -438,9 +428,9 @@ def generate_recommendation(
     # to this guest scenario.
 
     retrieved_chunks = vector_db.search(
-        scenario,
-        embedding_model,
-        top_k=3
+    scenario,
+    vectorizer,
+    top_k=3
     )
 
     # Combine those chunks into one context string
