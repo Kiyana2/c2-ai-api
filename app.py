@@ -384,11 +384,7 @@ WEAK_PROMPT = (
 # instead of the frontend deciding.
 
 class RecommendationRequest(BaseModel):
-
-    scenario: str
-
-    student_response: str = ""
-
+    guest_complaint: str
     recommendation_type: str = "good"
 
 
@@ -415,8 +411,8 @@ class RecommendationRequest(BaseModel):
 # actual AI model.
 
 def generate_recommendation(
-    scenario,
-    student_response="",
+    guest_complaint,
+    # student_response="",
     recommendation_type="good"
 ):
 
@@ -427,7 +423,7 @@ def generate_recommendation(
     # to this guest scenario.
 
     retrieved_chunks = vector_db.search(
-    scenario,
+    guest_complaint,
     vectorizer,
     top_k=3
     )
@@ -466,16 +462,16 @@ def generate_recommendation(
     # This is the actual guest situation being given to Qwen.
 
     user_message = (
-        f"Guest scenario:\n{scenario}\n"
+        f"Guest complaint:\n{guest_complaint}\n"
     )
 
     # Include the student's response if one was provided
-    if student_response:
+    # if student_response:
 
-        user_message += (
-            f"\nStudent response:\n"
-            f"{student_response}\n"
-        )
+    #     user_message += (
+    #         f"\nStudent response:\n"
+    #         f"{student_response}\n"
+    #     )
 
 
     # --------------------------------------------------------
@@ -551,9 +547,9 @@ def recommend(request: RecommendationRequest):
 
         recommendation = generate_recommendation(
 
-            scenario=request.scenario,
+            guest_complaint=request.guest_complaint,
 
-            student_response=request.student_response,
+            # student_response=request.student_response,
 
             recommendation_type=request.recommendation_type
         )
