@@ -4,6 +4,4 @@ pydantic
 numpy
 PyMuPDF
 groq
-sentence-transformers
---extra-index-url https://download.pytorch.org/whl/cpu
-torch
+scikit-learn
