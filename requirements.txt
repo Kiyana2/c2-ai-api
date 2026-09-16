@@ -1,0 +1,7 @@
+fastapi
+uvicorn
+pydantic
+numpy
+PyMuPDF
+sentence-transformers
+groq
