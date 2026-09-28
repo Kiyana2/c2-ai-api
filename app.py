@@ -1,86 +1,63 @@
-# ============================================================
 # IMPORTS
-# ============================================================
+
 # These are the libraries the API needs to run.
 #
 # FastAPI -> creates the API and the /recommend endpoint
-# Pydantic -> defines what data the API expects from the backend
+# Pydantic -> defines what data the API expects
 # fitz -> opens and reads the PDF files
 # numpy -> does the vector/similarity calculations
-# SentenceTransformer -> turns text into embeddings
-# Groq -> lets us send the retrieved information + scenario
-#         to the Qwen model
-# os -> lets us get the Groq API key from Render's environment variables
+# TfidfVectorizer -> turns text into numerical TF-IDF vectors
+# Groq -> sends the retrieved information + scenario to Qwen
+# os -> gets the Groq API key from environment variables
+# conversation -> manages conversation memory
 
 import os
 import fitz
 import numpy as np
+
 from sklearn.feature_extraction.text import TfidfVectorizer
-from fastapi import FastAPI, HTTPException
+
+from fastapi import FastAPI, HTTPException, Request, Response
+
 from pydantic import BaseModel
+
 from groq import Groq
 
+from conversation import (
+    create_conversation,
+    get_conversation,
+    add_message
+)
 
-# ============================================================
+
 # CREATE THE API
-# ============================================================
-# This creates our FastAPI application.
-#
-# Once this is deployed to Render, this app will be running
-# online and backend will be able to send requests to it.
 
-app = FastAPI(title="CATCH AI Recommendation API")
+app = FastAPI(
+    title="CATCH AI Recommendation API"
+)
 
 
-# ============================================================
 # GROQ SETUP
-# ============================================================
-# The Groq API key should NOT be written directly in this file.
-#
-# Locally, we can set it as an environment variable.
-# On Render, we will add GROQ_API_KEY as a secret/environment variable.
-#
-# This keeps the API key private instead of putting it in GitHub.
 
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
 if not GROQ_API_KEY:
-    raise RuntimeError("GROQ_API_KEY environment variable is not set.")
+    raise RuntimeError(
+        "GROQ_API_KEY environment variable is not set."
+    )
 
-groq_client = Groq(api_key=GROQ_API_KEY)
-
-
-# ============================================================
-# EMBEDDING MODEL
-# ============================================================
-# This is the same embedding model used in the notebook.
-#
-# It converts the PDF chunks and the guest scenario into
-# numerical vectors.
-#
-# We need these vectors so the system can find the pieces of
-# the CATCH/scenario documents that are most relevant to
-# the guest situation.
+groq_client = Groq(
+    api_key=GROQ_API_KEY
+)
 
 
-
-# ============================================================
 # PDF EXTRACTION + CHUNKING
-# ============================================================
-# This is the PDF processing function from the notebook.
-#
-# It does two things:
-#
-# 1. Extracts text from the PDFs.
-# 2. Breaks that text into smaller chunks for the RAG system.
-#
-# If a PDF page is scanned/image-based and normal text extraction
-# doesn't find enough text, it uses OCR instead.
-#
-# This means we don't have to manually turn every PDF page
-# into screenshots.
 
-def extract_and_chunk_pdf(pdf_path, chunk_size=500, overlap=100):
+def extract_and_chunk_pdf(
+    pdf_path,
+    chunk_size=500,
+    overlap=100
+):
 
     print(f"Opening {pdf_path}...")
 
@@ -91,11 +68,10 @@ def extract_and_chunk_pdf(pdf_path, chunk_size=500, overlap=100):
     # Go through every page in the PDF
     for page_num, page in enumerate(doc):
 
-        # First try to get normal selectable text
+        # Try normal selectable text first
         text = page.get_text("text").strip()
 
-        # If there is almost no text, assume the page is scanned
-        # and use OCR to read the image instead.
+        # If there is almost no text, try OCR
         if len(text) < 50:
 
             print(
@@ -130,19 +106,11 @@ def extract_and_chunk_pdf(pdf_path, chunk_size=500, overlap=100):
                 "via standard digital text."
             )
 
-        # Add this page's text to the complete document text
         full_text += text + "\n"
 
     doc.close()
 
-    # --------------------------------------------------------
     # BREAK THE PDF TEXT INTO CHUNKS
-    # --------------------------------------------------------
-    # The entire PDF shouldn't be sent to the model every time.
-    #
-    # Instead, we split it into smaller pieces.
-    # Later, the vector database will find the most relevant
-    # chunks for the specific guest scenario.
 
     words = full_text.split()
 
@@ -171,19 +139,11 @@ def extract_and_chunk_pdf(pdf_path, chunk_size=500, overlap=100):
     return chunks
 
 
-# ============================================================
 # SIMPLE VECTOR DATABASE
-# ============================================================
-# This is the same basic vector database from the notebook.
-#
-# Its job is to store:
-#
-# - the text chunks from our PDFs
-# - the numerical embeddings for those chunks
-#
-# When a guest scenario comes in, search() finds the chunks
-# that are most similar/relevant to that scenario.
+
 vectorizer = TfidfVectorizer()
+
+
 class SimpleVectorDB:
 
     def __init__(self):
@@ -191,14 +151,14 @@ class SimpleVectorDB:
         self.chunks = []
         self.embeddings = []
 
-    # Add all of our PDF chunks to the database
-    def add_documents(self, text_chunks, embedding_model):
+    # Add PDF chunks to the database
+    def add_documents(self, text_chunks):
 
         self.chunks.extend(text_chunks)
 
-        # Convert every chunk into an embedding/vector
-        vectors = vectorizer.transform(text_chunks).toarray()
-       
+        vectors = vectorizer.transform(
+            text_chunks
+        ).toarray()
 
         if len(self.embeddings) == 0:
 
@@ -207,21 +167,23 @@ class SimpleVectorDB:
         else:
 
             self.embeddings = np.vstack(
-                (self.embeddings, vectors)
+                (
+                    self.embeddings,
+                    vectors
+                )
             )
 
-    # Find the chunks that are most relevant to a query
+    # Find the most relevant chunks
     def search(
         self,
         query,
-        embedding_model,
         top_k=3
     ):
 
-        # Convert the guest scenario into an embedding
-        query_vector = vectorizer.transform([query]).toarray()[0]
+        query_vector = vectorizer.transform(
+            [query]
+        ).toarray()[0]
 
-        # Compare the guest scenario to every PDF chunk
         dot_products = np.dot(
             self.embeddings,
             query_vector
@@ -236,13 +198,11 @@ class SimpleVectorDB:
             query_vector
         )
 
-        # Calculate cosine similarity
         similarities = (
             dot_products /
             (norm_db * norm_query)
         )
 
-        # Get the three most relevant chunks
         top_indices = np.argsort(
             similarities
         )[::-1][:top_k]
@@ -253,21 +213,7 @@ class SimpleVectorDB:
         ]
 
 
-# ============================================================
 # BUILD THE KNOWLEDGE BASE
-# ============================================================
-# This happens when the API starts.
-#
-# We process both PDFs:
-#
-# - CATCH framework
-# - scenario information
-#
-# Then we combine all of their chunks into the same
-# vector database.
-#
-# This is what allows the AI to use BOTH sources when
-# creating a recommendation.
 
 vector_db = SimpleVectorDB()
 
@@ -280,17 +226,16 @@ all_text_chunks = []
 
 for pdf_file in pdf_files:
 
-    # Make sure the PDF was actually included in the
-    # project before trying to process it.
     if not os.path.exists(pdf_file):
 
         raise RuntimeError(
             f"Required PDF not found: {pdf_file}"
         )
 
-    chunks = extract_and_chunk_pdf(pdf_file)
+    chunks = extract_and_chunk_pdf(
+        pdf_file
+    )
 
-    # Add this PDF's chunks to the combined list
     all_text_chunks.extend(chunks)
 
 
@@ -299,167 +244,188 @@ print(
     f"{len(all_text_chunks)}"
 )
 
-vectorizer.fit(all_text_chunks)
-# Turn all chunks into embeddings and store them
-vector_db.add_documents(all_text_chunks, vectorizer)
+vectorizer.fit(
+    all_text_chunks
+)
 
-print("Vector database is ready.")
+vector_db.add_documents(
+    all_text_chunks
+)
+
+print(
+    "Vector database is ready."
+)
 
 
-# ============================================================
 # SIMULATION A PROMPT
-# ============================================================
-# Simulation A: the student gives a response and can ask the AI
-# for help/feedback on that response.
 
 SIMULATION_A_PROMPT = (
-    "You are a hospitality training assistant. "
-    "Based on the guest interaction, the student's response, and the retrieved context, "
-    "give the student helpful, practical feedback about their response. "
-    "Help the student improve how they would handle the guest. "
-    "If the student asks a question, answer that question using the available context. "
-    "Do not invent hotel-specific policies, services, prices, timeframes, or other factual information "
-    "that is not provided in the context. "
-    "Keep the response concise, specific, natural, professional, and actionable."
+     """
+You are a hospitality training assistant in Simulation A.
+
+Simulation A is focused on developing the student's judgment. Do not simply accept the student's reasoning.
+
+When the student gives a response:
+- Examine their reasoning.
+- Ask questions that make them think about their decision.
+- Point out important considerations they may have missed.
+- Challenge their assumptions when appropriate.
+- Provide constructive feedback.
+- If the student asks a question, answer it while helping them understand the reasoning behind the answer.
+
+Use the guest situation, previous conversation, and retrieved hospitality knowledge to guide the interaction.
+
+The goal is to help the student improve their decision-making, not simply give them the answer.
+"""
 )
 
 
-# ============================================================
+
 # GOOD RECOMMENDATION PROMPT
-# ============================================================
-# This is the prompt for the "good" AI behavior.
-#
-# The model should:
-# - understand the scenario
-# - identify the immediate request
-# - notice underlying needs/concerns
-# - use the CATCH framework
-# - give ONE practical recommendation
-#
-# We don't want the model explaining its reasoning to the student.
 
 GOOD_PROMPT = (
-    "You are a hospitality training assistant. "
-"Based on the guest's situation, the provided scenario, and the retrieved context, "
-"give the student one clear, practical recommendation for how they should respond to or handle the guest. "
-"The recommendation should address the guest's immediate request while naturally responding to any underlying need or concern revealed by the scenario. "
-"Apply the CATCH framework: Care, Adaptability, Think, Create Exceptional Experiences, and Human Connection. "
-"Do not explicitly describe, name, or explain the guest's underlying concern or the reasoning behind the recommendation. "
-"Instead, express the recommendation naturally as something the student could actually say or do with the guest. "
-"Do not use phrases such as 'acknowledge the underlying concern,' 'recognize the burden,' "
-"'identify the guest's emotional need,' or similar instructional language. "
-"Use general hospitality reasoning when appropriate, but do not invent hotel-specific policies, "
-"services, prices, timeframes, or other factual information that is not provided in the context. "
-"Return ONLY the practical recommendation. "
-"Keep it concise, specific, natural, professional, and actionable, ideally one or two sentences."
+     """
+    You are a hospitality training assistant in Simulation B.
+
+    Your role is to help the student develop their own response to the guest.
+
+    Start by providing a good recommendation based on the guest's situation.
+
+    After the student responds, continuously adjust the recommendation based on what the student says. If the student rejects the previous recommendation, do not defend or repeat it. Adapt to their reasoning and create a new recommendation that reflects their input, even if the previous recommendation was already a good response.
+
+    Continue adjusting the recommendation each time the student provides new suggestions, observations, or changes in direction. Do not stop adapting just because the previous recommendation was reasonable or effective.
+
+    The student's latest input should influence the next recommendation, while relevant ideas from earlier in the conversation can be retained when appropriate.
+
+    Do not argue with the student or evaluate whether their judgment is correct. The goal is to collaborate with the student and help turn their ideas into a practical guest response.
+
+    Use the CATCH framework and retrieved hospitality knowledge when relevant.
+    Do not invent hotel-specific details.
+
+    Return only the updated recommendation.
+    Keep it concise, around 1-2 sentences.
+    """
+
+    # "You are a hospitality training assistant. "
+    # "Based on the guest's situation, the provided scenario, and the retrieved context, "
+    # "give the student one clear, practical recommendation for how they should respond to or handle the guest. "
+    # "The recommendation should address the guest's immediate request while naturally responding to any underlying need or concern revealed by the scenario. "
+    # "Apply the CATCH framework: Care, Adaptability, Think, Create Exceptional Experiences, and Human Connection. "
+    # "Do not explicitly describe, name, or explain the guest's underlying concern or the reasoning behind the recommendation. "
+    # "Instead, express the recommendation naturally as something the student could actually say or do with the guest. "
+    # "Do not use phrases such as 'acknowledge the underlying concern,' 'recognize the burden,' "
+    # "'identify the guest's emotional need,' or similar instructional language. "
+    # "Use general hospitality reasoning when appropriate, but do not invent hotel-specific policies, "
+    # "services, prices, timeframes, or other factual information that is not provided in the context. "
+    # "Return ONLY the practical recommendation. "
+    # "Keep it concise, specific, natural, professional, and actionable, ideally one or two sentences."
 )
 
 
-# ============================================================
+
 # WEAK RECOMMENDATION PROMPT
-# ============================================================
-# This is the second possible AI behavior.
-#
-# The recommendation should NOT be obviously ridiculous.
-# It should be plausible, but weaker than the good recommendation.
-#
-# For example, it might address the guest's immediate request
-# but fail to recognize the underlying concern.
+
 
 WEAK_PROMPT = (
-    "You are a hospitality training assistant. "
+    "You are a hospitality training assistant in Simulation B. "
     "Based on the guest's situation, the provided scenario, and the retrieved context, "
     "give the student one weak but plausible recommendation for how they should respond "
     "to or handle the guest. "
+
     "Focus primarily on the guest's immediate request and do not fully address underlying "
     "needs, concerns, or circumstances that may be present in the scenario. "
+
     "Apply the CATCH framework only loosely and do not make a strong effort to incorporate "
     "all relevant principles. "
+
     "The recommendation may be generic, reactive, or minimally helpful, while still being "
     "reasonable enough that a student could plausibly give this response in a hospitality setting. "
+
+    "After the student responds, continuously adjust the recommendation based on what the student says. "
+    "If the student rejects the previous recommendation, do not defend or repeat it. "
+    "Adapt to the student's input and create a new recommendation based on what they are asking for, "
+    "even if the previous recommendation was already reasonable. "
+
+    "Continue adjusting the recommendation each time the student provides new suggestions, "
+    "observations, or changes in direction. The student's latest input should influence the next "
+    "recommendation, while relevant ideas from earlier in the conversation can be retained when appropriate. "
+
+    "Do not argue with the student or evaluate whether their judgment is correct. "
+
     "Use general hospitality reasoning when appropriate, but do not invent hotel-specific policies, "
     "services, prices, timeframes, or other factual information that is not provided in the context. "
+
     "Do not provide analysis, reasoning, explanations, or a breakdown of the CATCH framework. "
-    "Return ONLY the practical recommendation that the student should follow. "
+
+    "Return ONLY the updated practical recommendation that the student should follow. "
     "Keep the recommendation concise and professional."
 )
 
 
-# ============================================================
+
 # DEFINE WHAT THE API RECEIVES
-# ============================================================
-# This tells FastAPI what information backend can send.
+
 #
-# scenario -> the guest situation
+# Notice that conversation_id is NOT here.
 #
-# student_response -> optional. This allows the API to also
-#                     receive what the student said/did.
+# The backend handles the conversation ID through a cookie.
 #
-# recommendation_type -> tells our API whether we want the
-#                        GOOD or WEAK recommendation.
+# The frontend only needs to send the information it actually
+# knows about:
 #
-#  randomly choose "good" or "weak"
-# instead of the frontend deciding.
+# - guest_complaint
+# - simulation_type
+# - recommendation_type
+# - student_input
+# - student_question
 
 class RecommendationRequest(BaseModel):
+
     guest_complaint: str
     simulation_type: str = "B"
     recommendation_type: str = "good"
-    student_input: str = ""
-    student_question: str = ""
-# ============================================================
+    student_input: str | None = None
+    student_question: str | None = None
+
+
 # GENERATE THE RECOMMENDATION
-# ============================================================
-# This is the main AI pipeline.
-#
-# The flow is:
-#
-# Guest scenario
-#      ↓
-# Vector search
-#      ↓
-# Relevant CATCH/scenario chunks
-#      ↓
-# Good or weak system prompt
-#      ↓
-# Qwen through Groq
-#      ↓
-# Recommendation
-#
-# This function connects the RAG part of the project to the
-# actual AI model.
 
 def generate_recommendation(
     guest_complaint,
     simulation_type="B",
-    student_input="",
-    student_question="",
-    recommendation_type="good"
+    student_input=None,
+    student_question=None,
+    recommendation_type="good",
+    conversation_history=None
 ):
 
-    # --------------------------------------------------------
+    if conversation_history is None:
+        conversation_history = []
+
+
     # STEP 1: FIND RELEVANT INFORMATION
-    # --------------------------------------------------------
-    # Search the PDFs for the three chunks most relevant
-    # to this guest scenario.
 
     retrieved_chunks = vector_db.search(
-    guest_complaint,
-    vectorizer,
-    top_k=3
+        guest_complaint,
+        top_k=3
     )
 
-    # Combine those chunks into one context string
     context_str = "\n\n---\n\n".join(
         retrieved_chunks
     )
 
 
-    # --------------------------------------------------------
-    # STEP 2: CHOOSE GOOD OR WEAK PROMPT
-    # --------------------------------------------------------
-    # The backend tells us which type of recommendation
-    # we want.
+    # STEP 2: FORMAT CONVERSATION HISTORY
+
+    # This is what allows the AI to remember previous turns.
+
+    history_str = "\n".join(
+        f"{message['role']}: {message['content']}"
+        for message in conversation_history
+    )
+
+
+    # STEP 3: CHOOSE PROMPT
 
     if simulation_type == "A":
 
@@ -474,59 +440,55 @@ def generate_recommendation(
         system_prompt = GOOD_PROMPT
 
 
-    # Add the RAG information to the selected prompt
+    # Add RAG context
     system_prompt += (
         f"\n\nRETRIEVED CONTEXT:\n"
         f"{context_str}"
     )
 
 
-    # --------------------------------------------------------
-    # STEP 3: CREATE THE USER MESSAGE
-    # --------------------------------------------------------
-    # This is the actual guest situation being given to Qwen.
+    # STEP 4: CREATE USER MESSAGE
 
     if simulation_type == "A":
 
         user_message = (
-            f"Guest interaction:\n{guest_complaint}\n"
+            f"Guest interaction:\n"
+            f"{guest_complaint}\n"
         )
-
-        if student_input:
-
-            user_message += (
-                f"\nStudent response:\n"
-                f"{student_input}\n"
-            )
-
-        if student_question:
-
-            user_message += (
-                f"\nStudent question:\n"
-                f"{student_question}\n"
-            )
-
     else:
 
         user_message = (
-            f"Guest complaint:\n{guest_complaint}\n"
+            f"Guest complaint:\n"
+            f"{guest_complaint}\n"
         )
 
-        if student_input:
+    # Add previous conversation
+    if history_str:
 
-            user_message += (
-                f"\nStudent input:\n"
-                f"{student_input}\n"
-            )
+        user_message += (
+            f"\nPrevious conversation:\n"
+            f"{history_str}\n"
+        )
 
 
-    # --------------------------------------------------------
-    # STEP 4: CALL GROQ / QWEN
-    # --------------------------------------------------------
-    # Groq sends our prompt to the Qwen model.
-    #
-    # temperature=0.0 makes the output more consistent.
-    # max_tokens=800 limits how long the response can be.
+    # Add current student input
+    if student_input:
+
+        user_message += (
+            f"\nStudent input:\n"
+            f"{student_input}\n"
+        )
+
+    # Add current student question
+    if student_question:
+
+        user_message += (
+            f"\nStudent question:\n"
+            f"{student_question}\n"
+        )
+
+
+    # STEP 5: CALL GROQ / QWEN
 
     completion = groq_client.chat.completions.create(
 
@@ -549,19 +511,10 @@ def generate_recommendation(
     )
 
 
-    # Return only the actual recommendation text
     return completion.choices[0].message.content
 
 
-# ============================================================
 # TEST / HOME ROUTE
-# ============================================================
-# This isn't the AI endpoint.
-#
-# It's just a simple way to check whether the API is online.
-#
-# If you visit the API's main URL and see this response,
-# you know the server is running.
 
 @app.get("/")
 def home():
@@ -572,24 +525,83 @@ def home():
     }
 
 
-# ============================================================
 # RECOMMENDATION API ENDPOINT
-# ============================================================
-# THIS is the endpoint backend will call.
+
 #
-# The backend sends a POST request to:
+# The frontend does NOT send a conversation ID.
 #
-# /recommend
+# Instead:
 #
-# with the scenario, student response, and recommendation type.
+# 1. The backend checks for a conversation cookie.
+# 2. If there isn't one, the backend creates a conversation.
+# 3. The backend gets the conversation history.
+# 4. The AI uses that history.
+# 5. The new messages are saved.
+# 6. The backend sends the conversation cookie back.
 #
-# The endpoint then runs our RAG + AI pipeline and sends the
-# recommendation back as JSON.
+# The browser can then automatically send that cookie on
+# future requests.
 
 @app.post("/recommend")
-def recommend(request: RecommendationRequest):
+def recommend(
+    request: RecommendationRequest,
+    http_request: Request,
+    response: Response
+):
 
     try:
+
+        # GET OR CREATE CONVERSATION
+
+        conversation_id = (
+            http_request.cookies.get(
+                "conversation_id"
+            )
+        )
+
+        if not conversation_id:
+
+            conversation_id = (
+                create_conversation()
+            )
+
+            # Tell the browser to remember the ID.
+            #
+            # The frontend does not need to create or manage it.
+
+            response.set_cookie(
+                key="conversation_id",
+                value=conversation_id,
+                httponly=True,
+                secure=False,
+                samesite="lax"
+            )
+
+        # GET EXISTING CONVERSATION
+
+        history = get_conversation(
+            conversation_id
+        )
+
+        # SAVE ORIGINAL GUEST COMPLAINT
+        #
+        # Only save it if this is the beginning of a
+        # conversation.
+
+        if not history:
+
+            add_message(
+                conversation_id,
+                "guest",
+                request.guest_complaint
+            )
+
+            history = get_conversation(
+                conversation_id
+            )
+
+
+        # GENERATE AI RESPONSE
 
         recommendation = generate_recommendation(
 
@@ -601,18 +613,52 @@ def recommend(request: RecommendationRequest):
 
             student_question=request.student_question,
 
-            recommendation_type=request.recommendation_type
+            recommendation_type=request.recommendation_type,
+
+            conversation_history=history
         )
 
-        # Send the AI result back to backend
+
+        # SAVE STUDENT INPUT
+
+        if request.student_input:
+
+            add_message(
+                conversation_id,
+                "student",
+                request.student_input
+            )
+
+
+        # SAVE STUDENT QUESTION
+
+        if request.student_question:
+
+            add_message(
+                conversation_id,
+                "student",
+                request.student_question
+            )
+
+
+        # SAVE AI RESPONSE
+
+        add_message(
+            conversation_id,
+            "assistant",
+            recommendation
+        )
+
+
+        # RETURN RESPONSE
+
         return {
             "recommendation": recommendation
         }
 
+
     except Exception as e:
 
-        # If something goes wrong, return an API error
-        # instead of crashing silently.
         raise HTTPException(
             status_code=500,
             detail=str(e)
