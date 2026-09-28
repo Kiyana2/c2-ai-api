@@ -307,6 +307,24 @@ print("Vector database is ready.")
 
 
 # ============================================================
+# SIMULATION A PROMPT
+# ============================================================
+# Simulation A: the student gives a response and can ask the AI
+# for help/feedback on that response.
+
+SIMULATION_A_PROMPT = (
+    "You are a hospitality training assistant. "
+    "Based on the guest interaction, the student's response, and the retrieved context, "
+    "give the student helpful, practical feedback about their response. "
+    "Help the student improve how they would handle the guest. "
+    "If the student asks a question, answer that question using the available context. "
+    "Do not invent hotel-specific policies, services, prices, timeframes, or other factual information "
+    "that is not provided in the context. "
+    "Keep the response concise, specific, natural, professional, and actionable."
+)
+
+
+# ============================================================
 # GOOD RECOMMENDATION PROMPT
 # ============================================================
 # This is the prompt for the "good" AI behavior.
@@ -385,9 +403,10 @@ WEAK_PROMPT = (
 
 class RecommendationRequest(BaseModel):
     guest_complaint: str
+    simulation_type: str = "B"
     recommendation_type: str = "good"
-
-
+    student_input: str = ""
+    student_question: str = ""
 # ============================================================
 # GENERATE THE RECOMMENDATION
 # ============================================================
@@ -412,7 +431,9 @@ class RecommendationRequest(BaseModel):
 
 def generate_recommendation(
     guest_complaint,
-    # student_response="",
+    simulation_type="B",
+    student_input="",
+    student_question="",
     recommendation_type="good"
 ):
 
@@ -440,7 +461,11 @@ def generate_recommendation(
     # The backend tells us which type of recommendation
     # we want.
 
-    if recommendation_type == "weak":
+    if simulation_type == "A":
+
+        system_prompt = SIMULATION_A_PROMPT
+
+    elif recommendation_type == "weak":
 
         system_prompt = WEAK_PROMPT
 
@@ -461,17 +486,38 @@ def generate_recommendation(
     # --------------------------------------------------------
     # This is the actual guest situation being given to Qwen.
 
-    user_message = (
-        f"Guest complaint:\n{guest_complaint}\n"
-    )
+    if simulation_type == "A":
 
-    # Include the student's response if one was provided
-    # if student_response:
+        user_message = (
+            f"Guest interaction:\n{guest_complaint}\n"
+        )
 
-    #     user_message += (
-    #         f"\nStudent response:\n"
-    #         f"{student_response}\n"
-    #     )
+        if student_input:
+
+            user_message += (
+                f"\nStudent response:\n"
+                f"{student_input}\n"
+            )
+
+        if student_question:
+
+            user_message += (
+                f"\nStudent question:\n"
+                f"{student_question}\n"
+            )
+
+    else:
+
+        user_message = (
+            f"Guest complaint:\n{guest_complaint}\n"
+        )
+
+        if student_input:
+
+            user_message += (
+                f"\nStudent input:\n"
+                f"{student_input}\n"
+            )
 
 
     # --------------------------------------------------------
@@ -549,7 +595,11 @@ def recommend(request: RecommendationRequest):
 
             guest_complaint=request.guest_complaint,
 
-            # student_response=request.student_response,
+            simulation_type=request.simulation_type,
+
+            student_input=request.student_input,
+
+            student_question=request.student_question,
 
             recommendation_type=request.recommendation_type
         )
