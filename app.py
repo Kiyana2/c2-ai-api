@@ -18,6 +18,7 @@ import numpy as np
 from sklearn.feature_extraction.text import TfidfVectorizer
 
 from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi.middleware.cors import CORSMiddleware
 
 from pydantic import BaseModel
 
@@ -36,6 +37,13 @@ app = FastAPI(
     title="CATCH AI Recommendation API"
 )
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # GROQ SETUP
 
@@ -595,8 +603,8 @@ def recommend(
                 key="conversation_id",
                 value=conversation_id,
                 httponly=True,
-                secure=False,
-                samesite="lax"
+                secure=True,
+                samesite="none"
             )
 
         # GET EXISTING CONVERSATION
