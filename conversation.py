@@ -1,77 +1,65 @@
-# CONVERSATION MEMORY
 
-# This file is responsible only for conversation storage.
-#
-# It does NOT handle:
-# - FastAPI
-# - Groq
-# - Qwen
-# - PDFs
-# - RAG
-# - AI prompts
-#
-# It simply creates conversation IDs and stores messages
-# associated with those conversations.
+# conversation.py
+# Stores conversation history in server memory.
+# A backend restart clears all conversations automatically.
 
 import uuid
-
-
-# Stores all active conversations in memory.
-#
-# Example:
-#
-# {
-#     "conversation-id-123": [
-#         {"role": "guest", "content": "..."},
-#         {"role": "student", "content": "..."},
-#         {"role": "assistant", "content": "..."}
-#     ]
-# }
+from threading import RLock
 
 conversations = {}
+_conversations_lock = RLock()
 
-
-# CREATE A NEW CONVERSATION
 
 def create_conversation():
-    """
-    Creates a new conversation and returns its ID.
-    """
-
+    """Create a new, empty conversation."""
     conversation_id = str(uuid.uuid4())
 
-    conversations[conversation_id] = []
+    with _conversations_lock:
+        conversations[conversation_id] = []
 
     return conversation_id
 
 
-# GET CONVERSATION
-
 def get_conversation(conversation_id):
-    """
-    Returns the messages belonging to a conversation.
-    """
+    """Return a copy of the conversation history."""
+    if not conversation_id:
+        return []
 
-    return conversations.get(
-        conversation_id,
-        []
-    )
+    with _conversations_lock:
+        return [
+            message.copy()
+            for message in conversations.get(conversation_id, [])
+        ]
 
-
-# ADD MESSAGE
 
 def add_message(conversation_id, role, content):
-    """
-    Adds a message to an existing conversation.
+    """Add a message to an existing conversation."""
+    if not conversation_id or not content:
+        return
 
-    If the conversation does not exist yet,
-    it creates it automatically.
-    """
+    with _conversations_lock:
+        if conversation_id not in conversations:
+            conversations[conversation_id] = []
 
-    if conversation_id not in conversations:
+        conversations[conversation_id].append({
+            "role": role,
+            "content": content
+        })
+
+
+def clear_conversation(conversation_id):
+    """Clear history for a conversation without reusing old messages."""
+    if not conversation_id:
+        return
+
+    with _conversations_lock:
         conversations[conversation_id] = []
 
-    conversations[conversation_id].append({
-        "role": role,
-        "content": content
-    })
+
+def delete_conversation(conversation_id):
+    """Remove a conversation completely."""
+    if not conversation_id:
+        return
+
+    with _conversations_lock:
+        conversations.pop(conversation_id, None)
