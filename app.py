@@ -11,7 +11,7 @@ import numpy as np
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
-from groq import Groq
+from groq import Groq, APIError, APIConnectionError, APITimeoutError
 from sklearn.feature_extraction.text import TfidfVectorizer
 
 from conversation import (
@@ -37,12 +37,15 @@ app.add_middleware(
 )
 
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-
+GROQ_TIMEOUT_SECONDS = float(os.getenv("GROQ_TIMEOUT_SECONDS", "30"))
 if not GROQ_API_KEY:
     raise RuntimeError("GROQ_API_KEY environment variable is not set.")
 
-groq_client = Groq(api_key=GROQ_API_KEY)
-
+# groq_client = Groq(api_key=GROQ_API_KEY)
+groq_client = Groq(
+    api_key=GROQ_API_KEY,
+    timeout=GROQ_TIMEOUT_SECONDS
+)
 MODEL_NAME = "qwen/qwen3.8-27b"
 
 # ============================================================
@@ -376,13 +379,23 @@ def generate_recommendation(
         "role": "user",
         "content": "\n".join(user_parts),
     })
-
-    completion = groq_client.chat.completions.create(
-        model=MODEL_NAME,
-        messages=messages,
-        temperature=0.0,
-        max_tokens=800,
-    )
+    try:
+        completion = groq_client.chat.completions.create(
+            model=MODEL_NAME,
+            messages=messages,
+            temperature=0.0,
+            max_tokens=800,
+        )
+    except APITimeoutError:
+        raise HTTPException(
+            status_code=504,
+            detail="AI service timed out."
+        )
+    except (APIConnectionError, APIError):
+        raise HTTPException(
+            status_code=502,
+            detail="AI service error."
+        )
 
     answer = completion.choices[0].message.content
 
@@ -390,6 +403,19 @@ def generate_recommendation(
         raise RuntimeError("The AI returned an empty recommendation.")
 
     return answer.strip()
+    # completion = groq_client.chat.completions.create(
+    #     model=MODEL_NAME,
+    #     messages=messages,
+    #     temperature=0.0,
+    #     max_tokens=800,
+    # )
+
+    # answer = completion.choices[0].message.content
+
+    # if not answer or not answer.strip():
+    #     raise RuntimeError("The AI returned an empty recommendation.")
+
+    # return answer.strip()
 
 
 # ============================================================
