@@ -220,7 +220,9 @@ You are a hospitality training assistant in Simulation B.
 
     Your role is to help the student develop and improve a response to the guest.
 
-    Start by providing a strong recommendation based on the guest's situation.
+    Start by providing a good recommendation based on the guest's situation. Make the recommendation genuinely 
+    strong and appropriate, but avoid making it overly perfect or so obvious that students can immediately identify 
+    it as the correct approach. Keep the response natural and concise without overexplaining.
 
     After the student responds, treat their feedback as direction for improving the recommendation.
     Do not simply append their suggestion to the previous response. Reconsider and rewrite the
@@ -260,8 +262,11 @@ You are a hospitality training assistant in Simulation B.
 WEAK_PROMPT = """
 You are a hospitality training assistant in Simulation B.
     Based on the guest's situation, the provided scenario, and the retrieved context,
-    give the student one weak but plausible recommendation for how they should respond
-    to or handle the guest.
+    give the student a weak but plausible recommendation for how they should respond
+    to or handle the guest.Make the recommendation realistic and sufficiently developed
+    to feel like a complete response, rather than making it obviously weak through its
+    length or lack of detail. The weaknesses should come from the hospitality judgment itself, 
+    not from an incomplete response.
 
     Focus primarily on the guest's immediate request and do not fully address underlying
     needs, concerns, or circumstances that may be present in the scenario. 
@@ -429,7 +434,14 @@ def home():
         "message": "CATCH AI Recommendation API",
     }
 
+@app.get("/conversation/{conversation_id}")
+def retrieve_conversation(conversation_id: str):
+    history = get_conversation(conversation_id)
 
+    return {
+        "conversation_id": conversation_id,
+        "history": history,
+    }
 @app.post("/recommend")
 def recommend(request: RecommendationRequest):
     try:
